@@ -41,7 +41,7 @@ VSOutput main(VSInput input)
     output.Normal = mul((float3x3)objectData[0].model, input.Normal);
     output.Pos = mul(sceneData.projection, mul(sceneData.view, pos));
 
-    float3 lightPos = float3(0.0, 0.0, -10.0f);
+    float3 lightPos = float3(0.0, 0.0, 150.0f);
     output.LightVec = lightPos - pos.xyz;
     output.ViewVec = -pos.xyz;
 
@@ -57,6 +57,5 @@ float4 main(VSOutput input)
     float3 V = normalize(input.ViewVec);
     float3 R = reflect(-L, N);
     float3 diffuse = max(dot(N, L), 0.0) * input.Color;
-    float3 specular = pow(max(dot(R, V), 0.0), 32.0) * float3(0.75, 0.75, 0.75);
-    return float4(ambient + diffuse * 1.75 + specular, 1.0);
+    return float4(ambient + diffuse, 1.0);
 }

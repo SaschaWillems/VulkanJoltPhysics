@@ -57,8 +57,11 @@ vk::CommandPool commandPool{ VK_NULL_HANDLE };
 vk::Pipeline pipeline;
 vk::PipelineLayout pipelineLayout;
 vk::Image renderImage;
-VmaAllocation renderImageAllocation;
 vk::ImageView renderImageView;
+VmaAllocation renderImageAllocation;
+vk::Image depthImage;
+vk::ImageView depthImageView;
+VmaAllocation depthImageAllocation;
 std::vector<vk::Image> swapchainImages;
 std::vector<vk::ImageView> swapchainImageViews;
 std::vector<vk::CommandBuffer> commandBuffers(maxFramesInFlight);
@@ -109,8 +112,10 @@ struct SceneShaderData
 struct Camera
 {
 	glm::vec3 position{ 0.0f, 0.0f, -2.5f };
-	glm::vec3 rotation{ 0.0f };
+	glm::vec3 rotation{ 45.0f, 0.0f, 0.0f };
 } camera;
+
+bool paused{ false };
 
 // Unit cube
 float vertices[] = {
@@ -151,13 +156,13 @@ float vertices[] = {
 	 -0.5f, -0.5f, -0.5f,  0.0f, -1.0f,  0.0f
 };
 
-unsigned int indices[] = {
+uint32_t indices[] = {
 	0,1,2,		2,3,0,		// F
 	4,5,6,		6,7,4,		// B
 	8,9,10,		10,11,8,	// L
 	12,13,14,	14,15,12,	// R
-	16,17,18,	18,19,17,	// T
-	20,21,22,	22,23,21	// B
+	16,17,18,	18,19,16,	// T
+	20,21,22,	22,23,20	// B
 };
 
 void updatePerspective(sf::RenderWindow& window)
@@ -287,6 +292,13 @@ int main()
 		viewCI.image = swapchainImages[i];
 		swapchainImageViews[i] = device.createImageView(viewCI);
 	}
+	// Depth
+	const vk::Format depthFormat{ vk::Format::eD32Sfloat };
+	vk::ImageCreateInfo depthImageCI{ .imageType = vk::ImageType::e2D, .format = depthFormat, .extent = {.width = window.getSize().x, .height = window.getSize().y, .depth = 1 }, .mipLevels = 1, .arrayLayers = 1, .samples = sampleCount, .usage = vk::ImageUsageFlagBits::eDepthStencilAttachment };
+	VmaAllocationCreateInfo depthAllocCI{ .flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT, .usage = VMA_MEMORY_USAGE_AUTO, .priority = 1.0f };
+	vmaCreateImage(allocator, reinterpret_cast<VkImageCreateInfo*>(&depthImageCI), &depthAllocCI, reinterpret_cast<VkImage*>(&depthImage), &depthImageAllocation, nullptr);
+	vk::ImageViewCreateInfo depthViewCI{ .image = depthImage, .viewType = vk::ImageViewType::e2D, .format = depthFormat, .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eDepth, .levelCount = 1, .layerCount = 1 } };
+	depthImageView = device.createImageView(depthViewCI);
 
 	// Buffers
 	// @todo: vert and idx single buffer
@@ -377,14 +389,14 @@ int main()
 	vk::PipelineVertexInputStateCreateInfo vertexInputState{ .vertexBindingDescriptionCount = 1, .pVertexBindingDescriptions = &vertexBinding, .vertexAttributeDescriptionCount = 2, .pVertexAttributeDescriptions = vertexAttributes.data(), };
 	vk::PipelineInputAssemblyStateCreateInfo inputAssemblyState{ .topology = vk::PrimitiveTopology::eTriangleList };
 	vk::PipelineViewportStateCreateInfo viewportState{ .viewportCount = 1, .scissorCount = 1 };
-	vk::PipelineRasterizationStateCreateInfo rasterizationState{ .lineWidth = 1.0f };
+	vk::PipelineRasterizationStateCreateInfo rasterizationState{ .cullMode = vk::CullModeFlagBits::eNone, .lineWidth = 1.0f };
 	vk::PipelineMultisampleStateCreateInfo multisampleState{ .rasterizationSamples = sampleCount };
-	vk::PipelineDepthStencilStateCreateInfo depthStencilState{ };
+	vk::PipelineDepthStencilStateCreateInfo depthStencilState{ .depthTestEnable = VK_TRUE, .depthWriteEnable = VK_TRUE, .depthCompareOp = vk::CompareOp::eLessOrEqual };
 	vk::PipelineColorBlendAttachmentState blendAttachment{ .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA };
 	vk::PipelineColorBlendStateCreateInfo colorBlendState{ .attachmentCount = 1, .pAttachments = &blendAttachment };
 	std::vector<vk::DynamicState> dynamicStates{ vk::DynamicState::eViewport, vk::DynamicState::eScissor };
 	vk::PipelineDynamicStateCreateInfo dynamicState{ .dynamicStateCount = 2, .pDynamicStates = dynamicStates.data() };
-	vk::PipelineRenderingCreateInfo renderingCI{ .colorAttachmentCount = 1, .pColorAttachmentFormats = &imageFormat };
+	vk::PipelineRenderingCreateInfo renderingCI{ .colorAttachmentCount = 1, .pColorAttachmentFormats = &imageFormat, .depthAttachmentFormat = depthFormat };
 	vk::GraphicsPipelineCreateInfo pipelineCI{
 		.pNext = &renderingCI,
 		.stageCount = 2,
@@ -433,7 +445,19 @@ int main()
 			.storeOp = vk::AttachmentStoreOp::eStore,
 			.clearValue = vk::ClearValue{ vk::ClearColorValue{ std::array<float, 4>{0.0f, 0.0f, 0.2f, 1.0f} } },
 		};
-		vk::RenderingInfo renderingInfo{ .renderArea = {.extent = {.width = window.getSize().x, .height = window.getSize().y }}, .layerCount = 1, .colorAttachmentCount = 1, .pColorAttachments = &colorAttachmentInfo };
+		vk::RenderingAttachmentInfo depthAttachmentInfo{
+			.imageView = depthImageView,
+			.imageLayout = vk::ImageLayout::eGeneral,
+			.loadOp = vk::AttachmentLoadOp::eClear,
+			.storeOp = vk::AttachmentStoreOp::eStore,
+			.clearValue = vk::ClearValue{ vk::ClearDepthStencilValue{ .depth = 1.0f } },
+		};
+		vk::RenderingInfo renderingInfo{
+			.renderArea = {.extent = {.width = window.getSize().x, .height = window.getSize().y }}, .layerCount = 1,
+			.colorAttachmentCount = 1,
+			.pColorAttachments = &colorAttachmentInfo,
+			.pDepthAttachment =&depthAttachmentInfo,
+		};
 		cb.beginRendering(renderingInfo);
 		vk::Viewport vp{ .width = static_cast<float>(window.getSize().x), .height = static_cast<float>(window.getSize().y), .minDepth = 0.0f, .maxDepth = 1.0f };
 		cb.setViewport(0, 1, &vp);
@@ -443,7 +467,7 @@ int main()
 		vk::DeviceSize vOffset{ 0 };
 		cb.bindVertexBuffers(0, 1, &vBuffer, &vOffset);
 		cb.bindIndexBuffer(iBuffer, vOffset, vk::IndexType::eUint32);
-		cb.drawIndexed(24, 1, 0, 0, 0);
+		cb.drawIndexed(sizeof(indices) / sizeof(indices[0]), 1, 0, 0, 0);
 		cb.endRendering();
 		vk::ImageMemoryBarrier barrier1{
 			.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
@@ -475,6 +499,15 @@ int main()
 			if (event->is<sf::Event::Closed>()) {
 				window.close();
 			}
+			if (event->is<sf::Event::KeyPressed>()) {
+				const auto* keyPressed = event->getIf<sf::Event::KeyPressed>();
+				if (keyPressed->scancode == sf::Keyboard::Scancode::P) {
+					paused = !paused;
+				}
+				if (keyPressed->scancode == sf::Keyboard::Scancode::A) {
+					body->AddAngularImpulse(JPH::Vec3(30.0, 0.0, 75.0));
+				}
+			}
 			if (event->is<sf::Event::Resized>()) {
 				device.waitIdle();
 				swapchainCI.oldSwapchain = swapchain;
@@ -497,12 +530,20 @@ int main()
 					swapchainImageViews[i] = device.createImageView(viewCI);
 				}
 				device.destroySwapchainKHR(swapchainCI.oldSwapchain, nullptr);
+				depthImageCI.extent = { .width = static_cast<uint32_t>(window.getSize().x), .height = static_cast<uint32_t>(window.getSize().y), .depth = 1 };
+				vmaDestroyImage(allocator, depthImage, depthImageAllocation);
+				chk(vmaCreateImage(allocator, reinterpret_cast<VkImageCreateInfo*>(&depthImageCI), &depthAllocCI, reinterpret_cast<VkImage*>(&depthImage), &depthImageAllocation, nullptr));
+				vk::ImageViewCreateInfo depthViewCI{ .image = depthImage, .viewType = vk::ImageViewType::e2D, .format = depthFormat, .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eDepth, .levelCount = 1, .layerCount = 1 } };
+				depthImageView = device.createImageView(depthViewCI);
+
 				updatePerspective(window);
 			}
 		}
 		// Update world
 		// @todo: buffers per frame
-		physicsSystem.Update(dT.asSeconds(), physCollisionSteps, &temp_allocator, &job_system);
+		if (!paused) {
+			physicsSystem.Update(dT.asSeconds(), physCollisionSteps, &temp_allocator, &job_system);
+		}
 		JPH::Mat44 scaleMat = JPH::Mat44::sIdentity().PostScaled(cubeDim);
 		objectShaderData[0].model = body_interface.GetWorldTransform(body->GetID()) * scaleMat;
 		memcpy(sBufferAllocInfo.pMappedData, objectShaderData.data(), sizeof(ObjectShaderData) * objectShaderData.size());
@@ -520,6 +561,8 @@ int main()
 	}
 	vmaDestroyImage(allocator, renderImage, renderImageAllocation);
 	device.destroyImageView(renderImageView, nullptr);
+	vmaDestroyImage(allocator, depthImage, depthImageAllocation);
+	device.destroyImageView(depthImageView, nullptr);
 	for (auto i = 0; i < swapchainImageViews.size(); i++) {
 		device.destroyImageView(swapchainImageViews[i], nullptr);
 	}
