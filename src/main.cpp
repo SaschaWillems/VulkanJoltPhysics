@@ -13,10 +13,16 @@
 #include <string>
 #include <iostream>
 #include <thread>
+#include <fstream>
 #define VMA_IMPLEMENTATION
 #include <vma/vk_mem_alloc.h>
 #include "slang/slang.h"
 #include "slang/slang-com-ptr.h"
+
+#define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 #include "physicsworld.h"
 
@@ -33,39 +39,6 @@ static inline void chk(HRESULT result) {
 		exit(result);
 	}
 }
-
-static std::string shaderSrc = R"(
-
-struct ObjectShaderData {
-	float4x4 model;
-};
-StructuredBuffer<ObjectShaderData> objectData;
-
-struct VSInput
-{
-	float3 Pos : POSITION0;
-	float3 Normal;
-};
-
-struct VSOutput
-{
-	float4 Pos : SV_POSITION;
-	float3 Color;
-};
-
-[shader("vertex")]
-VSOutput main(VSInput input)
-{
-	VSOutput output;
-	output.Color = float3(1.0, 1.0, 1.0);
-	output.Pos = mul(objectData[0].model, float4(input.Pos, 1.0));
-	return output;
-}
-[shader("fragment")]
-float4 main(VSOutput input)
-{
-	return float4(input.Color, 1.0);
-})";
 
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
@@ -96,13 +69,16 @@ VmaAllocator allocator{ VK_NULL_HANDLE };
 VmaAllocation vBufferAllocation{ VK_NULL_HANDLE };
 VmaAllocation iBufferAllocation{ VK_NULL_HANDLE };
 VmaAllocation sBufferAllocation{ VK_NULL_HANDLE };
+VmaAllocation uBufferAllocation{ VK_NULL_HANDLE };
 VmaAllocationInfo sBufferAllocInfo{};
+VmaAllocationInfo uBufferAllocInfo{};
 vk::Buffer vBuffer{ VK_NULL_HANDLE };
 vk::Buffer iBuffer{ VK_NULL_HANDLE };
 vk::Buffer sBuffer{ VK_NULL_HANDLE };
+vk::Buffer uBuffer{ VK_NULL_HANDLE };
 vk::DescriptorPool descPool{ VK_NULL_HANDLE };
 vk::DescriptorSetLayout sceneDescLayout{ VK_NULL_HANDLE };
-vk::DescriptorSet sBufferDescSet{ VK_NULL_HANDLE };
+vk::DescriptorSet sceneDescSet{ VK_NULL_HANDLE };
 Slang::ComPtr<slang::IGlobalSession> slangGlobalSession;
 
 JPH::PhysicsSystem physicsSystem;
@@ -117,12 +93,24 @@ const uint32_t physMaxBodyPairs = 1024;
 const uint32_t physMaxContactConstraints = 1024;
 const uint32_t physCollisionSteps = 1;
 
-JPH::Vec3 cubeDim{ 0.5, 1.25, 1.0 };
+JPH::Vec3 cubeDim{ 0.5, 1.5, 1.0 };
 
 struct ObjectShaderData {
 	JPH::Mat44 model;
 };
 std::vector<ObjectShaderData> objectShaderData;
+
+struct SceneShaderData
+{
+	glm::mat4 projection;
+	glm::mat4 view;
+} sceneShaderData;
+
+struct Camera
+{
+	glm::vec3 position{ 0.0f, 0.0f, -2.5f };
+	glm::vec3 rotation{ 0.0f };
+} camera;
 
 // Unit cube
 float vertices[] = {
@@ -164,14 +152,35 @@ float vertices[] = {
 };
 
 unsigned int indices[] = {
-	0,1,2, 2,3,0,
-	//4,5,6, 6,7,0,
+	0,1,2,		2,3,0,		// F
+	4,5,6,		6,7,4,		// B
+	8,9,10,		10,11,8,	// L
+	12,13,14,	14,15,12,	// R
+	16,17,18,	18,19,17,	// T
+	20,21,22,	22,23,21	// B
+};
+
+void updatePerspective(sf::RenderWindow& window)
+{
+	sceneShaderData.projection = glm::perspective(glm::radians(60.0f), (float)static_cast<uint32_t>(window.getSize().x) / (float)static_cast<uint32_t>(window.getSize().y), 0.1f, 512.0f);
+}
+
+void updateViewMatrix()
+{
+	glm::mat4 rotM = glm::mat4(1.0f);
+	glm::mat4 transM;
+	rotM = glm::rotate(rotM, glm::radians(camera.rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+	rotM = glm::rotate(rotM, glm::radians(camera.rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+	rotM = glm::rotate(rotM, glm::radians(camera.rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+	transM = glm::translate(glm::mat4(1.0f), camera.position);
+	sceneShaderData.view = transM * rotM;
 };
 
 int main()
 {
 	// Setup
 	auto window = sf::RenderWindow(sf::VideoMode({ 1280, 720u }), "Modern Vulkan Triangle");
+	updatePerspective(window);
 	// Jolt physics
 	JPH::RegisterDefaultAllocator();
 	JPH::Factory::sInstance = new JPH::Factory();
@@ -197,13 +206,13 @@ int main()
 	body_settings.mMaxLinearVelocity = 10000.0;
 	body_settings.mApplyGyroscopicForce = true;
 	body_settings.mLinearDamping = 0.0;
-	body_settings.mAngularDamping = 0.0;
+	body_settings.mAngularDamping = 0.1;
 	JPH::Body* body = body_interface.CreateBody(body_settings);
 	body_interface.AddBody(body->GetID(), JPH::EActivation::Activate);
 	body_interface.SetLinearVelocity(body->GetID(), JPH::Vec3(0.0, 0.0, 0.0));
 	// @todo: test
-	body_interface.SetAngularVelocity(body->GetID(), JPH::Vec3(0.0, 0.25, 0.0));
-//	body_interface.SetAngularVelocity(body->GetID(), JPH::Vec3(0.3, 0.0, 5.0));
+	//body_interface.SetAngularVelocity(body->GetID(), JPH::Vec3(0.0, 0.25, 0.0));
+	body_interface.SetAngularVelocity(body->GetID(), JPH::Vec3(0.3, 0.0, 5.0));
 
 	physicsSystem.OptimizeBroadPhase();
 
@@ -225,9 +234,10 @@ int main()
 	slang::createGlobalSession(slangGlobalSession.writeRef());
 	auto targets{ std::to_array<slang::TargetDesc>({ {.format{SLANG_SPIRV}, .profile{slangGlobalSession->findProfile("spirv_1_6")} } }) };
 	auto options{ std::to_array<slang::CompilerOptionEntry>({ { slang::CompilerOptionName::EmitSpirvDirectly, {slang::CompilerOptionValueKind::Int, 1} } }) };
-	slang::SessionDesc desc{ .targets{targets.data()}, .targetCount{SlangInt(targets.size())}, .compilerOptionEntries{options.data()}, .compilerOptionEntryCount{uint32_t(options.size())} };
+	slang::SessionDesc desc{ .targets{targets.data()}, .targetCount{SlangInt(targets.size())}, .defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_COLUMN_MAJOR, .compilerOptionEntries{options.data()}, .compilerOptionEntryCount{uint32_t(options.size())} };
 	Slang::ComPtr<slang::ISession> slangSession;
 	slangGlobalSession->createSession(desc, slangSession.writeRef());
+
 	// Instance
 	VULKAN_HPP_DEFAULT_DISPATCHER.init();
 	vk::ApplicationInfo appInfo{ .pApplicationName = "Modern Vulkan Triangle", .apiVersion = VK_API_VERSION_1_3 };
@@ -297,19 +307,32 @@ int main()
 	chk(vmaCreateBuffer(allocator, &bufferCI, &bufferAllocCI, reinterpret_cast<VkBuffer*>(&sBuffer), &sBufferAllocation, &sBufferAllocInfo));
 	memcpy(sBufferAllocInfo.pMappedData, objectShaderData.data(), sizeof(ObjectShaderData) * objectShaderData.size());
 
+	bufferCI.size = sizeof(SceneShaderData);
+	bufferCI.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+	chk(vmaCreateBuffer(allocator, &bufferCI, &bufferAllocCI, reinterpret_cast<VkBuffer*>(&uBuffer), &uBufferAllocation, &uBufferAllocInfo));
+	memcpy(uBufferAllocInfo.pMappedData, &sceneShaderData, sizeof(SceneShaderData));
+
 	// Descriptors
 	std::vector<vk::DescriptorPoolSize> descPoolSizes = {
+		{ .type = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1 },
 		{ .type = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1 }
 	};
-	descPool = device.createDescriptorPool({ .maxSets = maxFramesInFlight, .poolSizeCount = 1, .pPoolSizes = descPoolSizes.data()});
+	descPool = device.createDescriptorPool({ .maxSets = maxFramesInFlight, .poolSizeCount = 2, .pPoolSizes = descPoolSizes.data()});
 
-	vk::DescriptorSetLayoutBinding layoutBinding{ .binding = 0, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eAll };
-	sceneDescLayout = device.createDescriptorSetLayout({ .bindingCount = 1, .pBindings = &layoutBinding });
-	sBufferDescSet = device.allocateDescriptorSets({ .descriptorPool = descPool, .descriptorSetCount = 1, .pSetLayouts = &sceneDescLayout })[0];
+	std::vector<vk::DescriptorSetLayoutBinding> layoutBindings{
+		{ .binding = 0, .descriptorType = vk::DescriptorType::eUniformBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eAll},
+		{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eAll},
+	};
+	sceneDescLayout = device.createDescriptorSetLayout({ .bindingCount = 2, .pBindings = layoutBindings.data()});
+	sceneDescSet = device.allocateDescriptorSets({ .descriptorPool = descPool, .descriptorSetCount = 1, .pSetLayouts = &sceneDescLayout })[0];
 	vk::DescriptorBufferInfo sBufferInfo{ .buffer = sBuffer, .offset = 0, .range = sizeof(ObjectShaderData) * objectShaderData.size() };
+	vk::DescriptorBufferInfo uBufferInfo{ .buffer = uBuffer, .offset = 0, .range = sizeof(SceneShaderData) };
 
-	vk::WriteDescriptorSet writeDescriptorSet = { .dstSet = sBufferDescSet, .dstBinding = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pBufferInfo = &sBufferInfo };
-	device.updateDescriptorSets(writeDescriptorSet, {});
+	std::vector<vk::WriteDescriptorSet> writeDescriptorSets = {
+		{ .dstSet = sceneDescSet, .dstBinding = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eUniformBuffer, .pBufferInfo = &uBufferInfo },
+		{ .dstSet = sceneDescSet, .dstBinding = 1, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pBufferInfo = &sBufferInfo }
+	};
+	device.updateDescriptorSets(writeDescriptorSets, {});
 
 	// Sync objects
 	commandPool = device.createCommandPool({ .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer, .queueFamilyIndex = qf });
@@ -324,7 +347,12 @@ int main()
 		renderSemaphores[i] = device.createSemaphore({});
 	}
 	// Shaders
-	// @todo : SlangMatrixLayoutMode defaultMatrixLayoutMode = SLANG_MATRIX_LAYOUT_ROW_MAJOR;
+	std::ifstream shaderFile("shaders/base.slang");
+	if (!shaderFile) {
+		fprintf(stderr, "Could not load shader file");
+		exit(-1);
+	}
+	std::string shaderSrc { std::istreambuf_iterator<char>(shaderFile), std::istreambuf_iterator<char>() };
 	Slang::ComPtr<slang::IBlob> diagnostics;
 	Slang::ComPtr<slang::IModule> slangModule{ slangSession->loadModuleFromSourceString("triangle", nullptr, shaderSrc.c_str(), diagnostics.writeRef()) };
 	Slang::ComPtr<ISlangBlob> spirv;
@@ -382,6 +410,8 @@ int main()
 		device.waitForFences(fences[frameIndex], true, UINT64_MAX);
 		device.resetFences(fences[frameIndex]);
 		device.acquireNextImageKHR(swapchain, UINT64_MAX, presentSemaphores[semaphoreIndex], VK_NULL_HANDLE, &imageIndex);
+		updateViewMatrix();
+		memcpy(uBufferAllocInfo.pMappedData, &sceneShaderData, sizeof(SceneShaderData));
 		auto& cb = commandBuffers[frameIndex];
 		cb.reset();
 		cb.begin({ .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit });
@@ -409,7 +439,7 @@ int main()
 		cb.setViewport(0, 1, &vp);
 		cb.setScissor(0, 1, &renderingInfo.renderArea);
 		cb.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
-		cb.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, { sBufferDescSet }, {});
+		cb.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, { sceneDescSet }, {});
 		vk::DeviceSize vOffset{ 0 };
 		cb.bindVertexBuffers(0, 1, &vBuffer, &vOffset);
 		cb.bindIndexBuffer(iBuffer, vOffset, vk::IndexType::eUint32);
@@ -467,6 +497,7 @@ int main()
 					swapchainImageViews[i] = device.createImageView(viewCI);
 				}
 				device.destroySwapchainKHR(swapchainCI.oldSwapchain, nullptr);
+				updatePerspective(window);
 			}
 		}
 		// Update world
@@ -495,6 +526,7 @@ int main()
 	vmaDestroyBuffer(allocator, vBuffer, vBufferAllocation);
 	vmaDestroyBuffer(allocator, iBuffer, iBufferAllocation);
 	vmaDestroyBuffer(allocator, sBuffer, sBufferAllocation);
+	vmaDestroyBuffer(allocator, uBuffer, uBufferAllocation);
 	device.destroyCommandPool(commandPool, nullptr);
 	device.destroyPipelineLayout(pipelineLayout, nullptr);
 	device.destroyPipeline(pipeline, nullptr);
