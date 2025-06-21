@@ -76,6 +76,8 @@ public:
 		bool down = false;
 	} keys;
 
+	glm::vec3 forwardVector;
+
 	bool moving() const
 	{
 		return keys.left || keys.right || keys.up || keys.down;
@@ -159,26 +161,26 @@ public:
 	void update(float deltaTime)
 	{
 		updated = false;
+
+		forwardVector.x = -cos(glm::radians(rotation.x)) * sin(glm::radians(rotation.y));
+		forwardVector.y = sin(glm::radians(rotation.x));
+		forwardVector.z = cos(glm::radians(rotation.x)) * cos(glm::radians(rotation.y));
+		forwardVector = glm::normalize(forwardVector);
+
 		if (type == CameraType::firstperson)
 		{
 			if (moving())
 			{
-				glm::vec3 camFront;
-				camFront.x = -cos(glm::radians(rotation.x)) * sin(glm::radians(rotation.y));
-				camFront.y = sin(glm::radians(rotation.x));
-				camFront.z = cos(glm::radians(rotation.x)) * cos(glm::radians(rotation.y));
-				camFront = glm::normalize(camFront);
-
 				float moveSpeed = deltaTime * movementSpeed;
 
 				if (keys.up)
-					position += camFront * moveSpeed;
+					position += forwardVector * moveSpeed;
 				if (keys.down)
-					position -= camFront * moveSpeed;
+					position -= forwardVector * moveSpeed;
 				if (keys.left)
-					position -= glm::normalize(glm::cross(camFront, glm::vec3(0.0f, 1.0f, 0.0f))) * moveSpeed;
+					position -= glm::normalize(glm::cross(forwardVector, glm::vec3(0.0f, 1.0f, 0.0f))) * moveSpeed;
 				if (keys.right)
-					position += glm::normalize(glm::cross(camFront, glm::vec3(0.0f, 1.0f, 0.0f))) * moveSpeed;
+					position += glm::normalize(glm::cross(forwardVector, glm::vec3(0.0f, 1.0f, 0.0f))) * moveSpeed;
 			}
 		}
 		updateViewMatrix();

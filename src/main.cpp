@@ -91,11 +91,11 @@ PhysicsWorld::ObjectVsBroadPhaseLayerFilterImpl object_vs_broadphase_layer_filte
 PhysicsWorld::ObjectLayerPairFilterImpl object_vs_object_layer_filter;
 JPH::Body* floorBody;
 
-const uint32_t physMaxBodies = 1024;
+const uint32_t physMaxBodies = 4096;
 const uint32_t physNumBodyMutexes = 0;
 const uint32_t physMaxBodyPairs = 1024;
 const uint32_t physMaxContactConstraints = 1024;
-const uint32_t physCollisionSteps = 1;
+const uint32_t physCollisionSteps = 4;
 
 struct ObjectShaderData {
 	JPH::Mat44 model;
@@ -533,8 +533,20 @@ int main()
 				if (keyPressed->scancode == sf::Keyboard::Scancode::P) {
 					paused = !paused;
 				}
-				if (keyPressed->scancode == sf::Keyboard::Scancode::A) {
-					//newBody->body->AddAngularImpulse(JPH::Vec3(30.0, 0.0, 75.0));
+				if (keyPressed->scancode == sf::Keyboard::Scancode::Space) {
+					// Throw a new object in the camera view direction
+					const JPH::Vec3 dim{ 0.25, 0.25, 0.25 };
+					JPH::BoxShapeSettings body_shape_settings(dim * 0.5);
+					body_shape_settings.mConvexRadius = 0.01;
+					body_shape_settings.SetDensity(250.0);
+					body_shape_settings.SetEmbedded();
+					JPH::ShapeSettings::ShapeResult body_shape_result = body_shape_settings.Create();
+					JPH::ShapeRefC body_shape = body_shape_result.Get();
+					JPH::BodyCreationSettings body_settings(body_shape, JPH::RVec3(camera.position.x, camera.position.y, camera.position.z) * -1.0, JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic, PhysicsWorld::Layers::MOVING);
+					auto newBody = PhysicsWorld::world->AddNewObject(body_interface.CreateBody(body_settings), dim, { 1.0, 1.0, 1.0 });
+					body_interface.AddBody(newBody->id, JPH::EActivation::Activate);
+					body_interface.AddLinearVelocity(newBody->id, JPH::Vec3(camera.forwardVector.x, camera.forwardVector.y, camera.forwardVector.z) * -100.0f);
+				}
 				}
 			}
 
