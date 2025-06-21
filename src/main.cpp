@@ -95,7 +95,7 @@ const uint32_t physMaxBodies = 4096;
 const uint32_t physNumBodyMutexes = 0;
 const uint32_t physMaxBodyPairs = 1024;
 const uint32_t physMaxContactConstraints = 1024;
-const uint32_t physCollisionSteps = 4;
+const uint32_t physCollisionSteps = 2;
 
 struct ObjectShaderData {
 	JPH::Mat44 model;
@@ -177,9 +177,10 @@ void updateViewMatrix(float dT)
 int main()
 {
 	// Setup
-	auto window = sf::RenderWindow(sf::VideoMode({ 1280, 720u }), "Vulkan Jolt Physics Playground");
+	bool fullscreen = true;
+	auto window = sf::RenderWindow(sf::VideoMode({ 1920u, 1080u }), "Vulkan Jolt Physics Playground", fullscreen ? sf::State::Fullscreen : sf::State::Windowed);
 	updatePerspective(window);
-	camera.setPosition({ 0.0f, 2.0f, -25.0f });
+	camera.setPosition({ 0.0f, 5.0f, -25.0f });
 	camera.setRotation({ 0.0f, 0.0f, 0.0f });
 	camera.movementSpeed = 10.0f;
 	camera.rotationSpeed = 0.25f;
@@ -204,9 +205,10 @@ int main()
 
 	// Add some random cubes
 	std::vector<glm::vec3> colors = {
-		{ 0.0, 0.0, 1.0 }, { 0.0, 1.0, 0.0 }, { 1.0, 0.0, 0.0 }, { 0.0, 1.0, 1.0 }, { 1.0, 1.0, 0.0 }, { 1.0, 1.0, 1.0 }
+		{ 0.0, 0.0, 1.0 }, { 0.0, 1.0, 0.0 }, { 1.0, 0.0, 0.0 }, { 0.0, 1.0, 1.0 }, { 1.0, 1.0, 0.0 }, { 1.0, 1.0, 1.0 }, { 1.0, 0.0, 1.0 }
 	};
 
+	/*
 	for (uint32_t i = 0; i < 20; i++) {
 		const JPH::Vec3 dim{ 1.0, 1.0, 1.0 };
 		JPH::BoxShapeSettings body_shape_settings(dim * 0.5);
@@ -220,6 +222,7 @@ int main()
 		auto newBody = PhysicsWorld::world->AddNewObject(body_interface.CreateBody(body_settings), dim, colors[colorIndex]);
 		body_interface.AddBody(newBody->id, JPH::EActivation::Activate);
 	}
+	*/
 	
 	// Fixed floor
 	JPH::Vec3 floorDim(100.0f, 0.1f, 100.0f);
@@ -230,7 +233,6 @@ int main()
 	JPH::BodyCreationSettings floor_settings(floor_shape, JPH::RVec3(0.0, -0.5, 0.0), JPH::Quat::sIdentity(), JPH::EMotionType::Static, PhysicsWorld::Layers::NON_MOVING);
 	auto floorBody = PhysicsWorld::world->AddNewObject(body_interface.CreateBody(floor_settings), floorDim, { 0.5, 0.5, 0.5 });
 	body_interface.AddBody(floorBody->id, JPH::EActivation::DontActivate);
-
 
 	physicsSystem.OptimizeBroadPhase();
 
@@ -530,23 +532,49 @@ int main()
 			
 			if (event->is<sf::Event::KeyPressed>()) {
 				const auto* keyPressed = event->getIf<sf::Event::KeyPressed>();
+				
 				if (keyPressed->scancode == sf::Keyboard::Scancode::P) {
 					paused = !paused;
 				}
+
+				// Shot a high velocity object at camera direction
 				if (keyPressed->scancode == sf::Keyboard::Scancode::Space) {
 					// Throw a new object in the camera view direction
-					const JPH::Vec3 dim{ 0.25, 0.25, 0.25 };
+					const JPH::Vec3 dim{ 0.5, 0.5, 0.5 };
 					JPH::BoxShapeSettings body_shape_settings(dim * 0.5);
 					body_shape_settings.mConvexRadius = 0.01;
-					body_shape_settings.SetDensity(250.0);
+					body_shape_settings.SetDensity(1000.0);
 					body_shape_settings.SetEmbedded();
 					JPH::ShapeSettings::ShapeResult body_shape_result = body_shape_settings.Create();
 					JPH::ShapeRefC body_shape = body_shape_result.Get();
 					JPH::BodyCreationSettings body_settings(body_shape, JPH::RVec3(camera.position.x, camera.position.y, camera.position.z) * -1.0, JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic, PhysicsWorld::Layers::MOVING);
 					auto newBody = PhysicsWorld::world->AddNewObject(body_interface.CreateBody(body_settings), dim, { 1.0, 1.0, 1.0 });
 					body_interface.AddBody(newBody->id, JPH::EActivation::Activate);
-					body_interface.AddLinearVelocity(newBody->id, JPH::Vec3(camera.forwardVector.x, camera.forwardVector.y, camera.forwardVector.z) * -100.0f);
+					body_interface.AddLinearAndAngularVelocity(newBody->id, JPH::Vec3(camera.forwardVector.x, camera.forwardVector.y, camera.forwardVector.z) * -150.0f, JPH::Vec3(100.0f, 100.0f, 100.0f));
 				}
+
+				// Drop some random cubes
+				if (keyPressed->scancode == sf::Keyboard::Scancode::O) {
+					std::default_random_engine rGen((unsigned)time(nullptr));
+					std::uniform_real_distribution<float> rDist(-0.4, 0.4);
+					std::uniform_real_distribution<float> cDist(0.1, 1.0);
+					uint32_t idx = 0;
+					for (int32_t x = -4; x < 4; x++, idx++) {
+						for (int32_t y = -4; y < 4; y++, idx++) {
+							const JPH::Vec3 dim{ 1.0, 1.0, 1.0 };
+							JPH::BoxShapeSettings body_shape_settings(dim * 0.5);
+							body_shape_settings.mConvexRadius = 0.01;
+							body_shape_settings.SetDensity(250.0);
+							body_shape_settings.SetEmbedded();
+							JPH::ShapeSettings::ShapeResult body_shape_result = body_shape_settings.Create();
+							JPH::ShapeRefC body_shape = body_shape_result.Get();
+							JPH::Vec3 pos = { (float)x * 1.5f + rDist(rGen), -15.0f + rDist(rGen), (float)y * 1.5f + rDist(rGen)};
+							JPH::BodyCreationSettings body_settings(body_shape, JPH::RVec3(pos), JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic, PhysicsWorld::Layers::MOVING);
+							glm::vec3 color = { cDist(rGen), cDist(rGen), cDist(rGen) };
+							auto newBody = PhysicsWorld::world->AddNewObject(body_interface.CreateBody(body_settings), dim, color);
+							body_interface.AddBody(newBody->id, JPH::EActivation::Activate);
+						}
+					}
 				}
 			}
 
