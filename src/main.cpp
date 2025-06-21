@@ -25,6 +25,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include "physicsworld.h"
+#include "camera.hpp"
 
 static inline void chk(VkResult result) {
 	if (result != VK_SUCCESS) {
@@ -108,13 +109,10 @@ struct SceneShaderData
 	glm::mat4 view;
 } sceneShaderData;
 
-struct Camera
-{
-	glm::vec3 position{ 0.0f, 2.0f, -25.0f };
-	glm::vec3 rotation{ 0.0f, 0.0f, 0.0f };
-} camera;
-
 bool paused{ true };
+
+Camera camera;
+sf::Vector2f mousePosition;
 
 // Unit cube
 float vertices[] = {
@@ -166,25 +164,26 @@ uint32_t indices[] = {
 
 void updatePerspective(sf::RenderWindow& window)
 {
-	sceneShaderData.projection = glm::perspective(glm::radians(60.0f), (float)static_cast<uint32_t>(window.getSize().x) / (float)static_cast<uint32_t>(window.getSize().y), 0.1f, 512.0f);
+	camera.setPerspective(60.0f, (float)static_cast<uint32_t>(window.getSize().x) / (float)static_cast<uint32_t>(window.getSize().y), 0.1f, 512.0f);
+	sceneShaderData.projection = camera.matrices.perspective;
 }
 
-void updateViewMatrix()
+void updateViewMatrix(float dT)
 {
-	glm::mat4 rotM = glm::mat4(1.0f);
-	glm::mat4 transM;
-	rotM = glm::rotate(rotM, glm::radians(camera.rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
-	rotM = glm::rotate(rotM, glm::radians(camera.rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
-	rotM = glm::rotate(rotM, glm::radians(camera.rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
-	transM = glm::translate(glm::mat4(1.0f), camera.position * glm::vec3(1.0f, 1.0f, 1.0f));
-	sceneShaderData.view = transM * rotM;
+	camera.update(dT);
+	sceneShaderData.view = camera.matrices.view;
 };
 
 int main()
 {
 	// Setup
-	auto window = sf::RenderWindow(sf::VideoMode({ 1280, 720u }), "Modern Vulkan Triangle");
+	auto window = sf::RenderWindow(sf::VideoMode({ 1280, 720u }), "Vulkan Jolt Physics Playground");
 	updatePerspective(window);
+	camera.setPosition({ 0.0f, 2.0f, -25.0f });
+	camera.setRotation({ 0.0f, 0.0f, 0.0f });
+	camera.movementSpeed = 10.0f;
+	camera.rotationSpeed = 0.25f;
+
 	// Jolt physics
 	JPH::RegisterDefaultAllocator();
 	JPH::Factory::sInstance = new JPH::Factory();
@@ -417,16 +416,36 @@ int main()
 	};
 	std::tie(result, pipeline) = device.createGraphicsPipeline(nullptr, pipelineCI);
 	device.destroyShaderModule(shaderModule, nullptr);
+	
 	// Render
+
 	sf::Clock clock;
+	mousePosition = sf::Vector2f(sf::Mouse::getPosition(window));
 	while (window.isOpen())
 	{
 		sf::Time dT = clock.restart();
+		
+		// Input
+		sf::Vector2 newMousePos = sf::Vector2f(sf::Mouse::getPosition(window));
+		sf::Vector2f mouseDelta = mousePosition - newMousePos;
+		mousePosition = newMousePos;
+			
+		// Keys
+		camera.keys.up = sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::W);
+		camera.keys.down = sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::S);
+		camera.keys.left = sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::A);
+		camera.keys.right = sf::Keyboard::isKeyPressed(sf::Keyboard::Scancode::D);
+		
+		// Mouse
+		if (sf::Mouse::isButtonPressed(sf::Mouse::Button::Left)) {
+			camera.rotate(glm::vec3(mouseDelta.y * camera.rotationSpeed, -mouseDelta.x * camera.rotationSpeed, 0.0f));
+		}
+
 		// Build CB
 		device.waitForFences(fences[frameIndex], true, UINT64_MAX);
 		device.resetFences(fences[frameIndex]);
 		device.acquireNextImageKHR(swapchain, UINT64_MAX, presentSemaphores[semaphoreIndex], VK_NULL_HANDLE, &imageIndex);
-		updateViewMatrix();
+		updateViewMatrix(dT.asSeconds());
 		memcpy(uBufferAllocInfo.pMappedData, &sceneShaderData, sizeof(SceneShaderData));
 		auto& cb = commandBuffers[frameIndex];
 		cb.reset();
@@ -504,9 +523,11 @@ int main()
 		frameIndex = (frameIndex + 1) % maxFramesInFlight;
 		semaphoreIndex = (semaphoreIndex + 1) % static_cast<uint32_t>(swapchainImages.size());
 		while (const std::optional event = window.pollEvent()) {
+			
 			if (event->is<sf::Event::Closed>()) {
 				window.close();
 			}
+			
 			if (event->is<sf::Event::KeyPressed>()) {
 				const auto* keyPressed = event->getIf<sf::Event::KeyPressed>();
 				if (keyPressed->scancode == sf::Keyboard::Scancode::P) {
@@ -516,6 +537,7 @@ int main()
 					//newBody->body->AddAngularImpulse(JPH::Vec3(30.0, 0.0, 75.0));
 				}
 			}
+
 			if (event->is<sf::Event::Resized>()) {
 				device.waitIdle();
 				swapchainCI.oldSwapchain = swapchain;
