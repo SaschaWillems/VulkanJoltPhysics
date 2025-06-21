@@ -12,7 +12,8 @@ struct SceneData
 ConstantBuffer<SceneData> sceneData;
 
 struct ObjectShaderData {
-	float4x4 model;
+    float4x4 model;
+    float4 color;
 };
 StructuredBuffer<ObjectShaderData> objectData;
 
@@ -32,13 +33,13 @@ struct VSOutput
 };
 
 [shader("vertex")]
-VSOutput main(VSInput input)
+VSOutput main(VSInput input, uniform uint objIndex)
 {
-    float4 pos = mul(objectData[0].model, float4(input.Pos, 1.0));
+    float4 pos = mul(objectData[objIndex].model, float4(input.Pos, 1.0));
 
-	VSOutput output;
-    output.Color = float3(1.0, 1.0, 1.0);
-    output.Normal = mul((float3x3)objectData[0].model, input.Normal);
+    VSOutput output;
+    output.Color = objectData[objIndex].color.rgb;
+    output.Normal = mul((float3x3)objectData[objIndex].model, input.Normal);
     output.Pos = mul(sceneData.projection, mul(sceneData.view, pos));
 
     float3 lightPos = float3(0.0, 0.0, 150.0f);

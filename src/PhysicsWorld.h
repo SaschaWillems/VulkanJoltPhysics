@@ -20,6 +20,25 @@
 
 namespace PhysicsWorld {
 
+	class Object {
+	public:
+		JPH::Body* body;
+		JPH::BodyID id;
+		JPH::Vec3 scale;
+		glm::vec3 color;
+	};
+
+	class World {
+	public:
+		std::vector<Object> bodies;
+		const Object* AddNewObject(JPH::Body* body, JPH::Vec3 scale, glm::vec3 color) {
+			bodies.push_back({ .body = body, .id = body->GetID(), .scale = scale, .color = color });
+			return &bodies.at(bodies.size() - 1);
+		};
+	};
+
+	World* world;
+
 	namespace Layers
 	{
 		static constexpr JPH::ObjectLayer NON_MOVING = 0;

@@ -96,10 +96,9 @@ const uint32_t physMaxBodyPairs = 1024;
 const uint32_t physMaxContactConstraints = 1024;
 const uint32_t physCollisionSteps = 1;
 
-JPH::Vec3 cubeDim{ 0.5, 1.5, 1.0 };
-
 struct ObjectShaderData {
 	JPH::Mat44 model;
+	glm::vec4 color;
 };
 std::vector<ObjectShaderData> objectShaderData;
 
@@ -111,11 +110,11 @@ struct SceneShaderData
 
 struct Camera
 {
-	glm::vec3 position{ 0.0f, 0.0f, -2.5f };
-	glm::vec3 rotation{ 45.0f, 0.0f, 0.0f };
+	glm::vec3 position{ 0.0f, 2.0f, -25.0f };
+	glm::vec3 rotation{ 0.0f, 0.0f, 0.0f };
 } camera;
 
-bool paused{ false };
+bool paused{ true };
 
 // Unit cube
 float vertices[] = {
@@ -177,7 +176,7 @@ void updateViewMatrix()
 	rotM = glm::rotate(rotM, glm::radians(camera.rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
 	rotM = glm::rotate(rotM, glm::radians(camera.rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
 	rotM = glm::rotate(rotM, glm::radians(camera.rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
-	transM = glm::translate(glm::mat4(1.0f), camera.position);
+	transM = glm::translate(glm::mat4(1.0f), camera.position * glm::vec3(1.0f, 1.0f, 1.0f));
 	sceneShaderData.view = transM * rotM;
 };
 
@@ -194,46 +193,50 @@ int main()
 	JPH::JobSystemThreadPool job_system(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, std::thread::hardware_concurrency() - 1);
 	physicsSystem.Init(physMaxBodies, physMaxBodies, physMaxBodies, physMaxBodies, broad_phase_layer_interface, object_vs_broadphase_layer_filter, object_vs_object_layer_filter);
 	// @todo: just for testing
-	physicsSystem.SetGravity(JPH::Vec3::sZero());
+	physicsSystem.SetGravity({ 0.0, 9.8, 0.0 });
 	PhysicsWorld::MyBodyActivationListener body_activation_listener;
 	physicsSystem.SetBodyActivationListener(&body_activation_listener);
 	PhysicsWorld::MyContactListener contact_listener;
 	physicsSystem.SetContactListener(&contact_listener);
 	JPH::BodyInterface& body_interface = physicsSystem.GetBodyInterface();
+
 	// Physics world
-	JPH::BoxShapeSettings body_shape_settings(cubeDim);
-	body_shape_settings.mConvexRadius = 0.01;
-	body_shape_settings.SetDensity(1000.0);
-	body_shape_settings.SetEmbedded();
-	JPH::ShapeSettings::ShapeResult body_shape_result = body_shape_settings.Create();
-	JPH::ShapeRefC body_shape = body_shape_result.Get();
-	JPH::BodyCreationSettings body_settings(body_shape, JPH::RVec3(0.0, 0.0, 0.0), JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic, PhysicsWorld::Layers::MOVING);
-	body_settings.mMaxLinearVelocity = 10000.0;
-	body_settings.mApplyGyroscopicForce = true;
-	body_settings.mLinearDamping = 0.0;
-	body_settings.mAngularDamping = 0.1;
-	JPH::Body* body = body_interface.CreateBody(body_settings);
-	body_interface.AddBody(body->GetID(), JPH::EActivation::Activate);
-	body_interface.SetLinearVelocity(body->GetID(), JPH::Vec3(0.0, 0.0, 0.0));
-	// @todo: test
-	//body_interface.SetAngularVelocity(body->GetID(), JPH::Vec3(0.0, 0.25, 0.0));
-	body_interface.SetAngularVelocity(body->GetID(), JPH::Vec3(0.3, 0.0, 5.0));
+	PhysicsWorld::world = new PhysicsWorld::World();
 
-	physicsSystem.OptimizeBroadPhase();
+	// Add some random cubes
+	std::vector<glm::vec3> colors = {
+		{ 0.0, 0.0, 1.0 }, { 0.0, 1.0, 0.0 }, { 1.0, 0.0, 0.0 }, { 0.0, 1.0, 1.0 }, { 1.0, 1.0, 0.0 }, { 1.0, 1.0, 1.0 }
+	};
 
-	/*
-	JPH::BoxShapeSettings floor_shape_settings(JPH::Vec3(100.0f, 1.0f, 100.0f));
+	for (uint32_t i = 0; i < 20; i++) {
+		const JPH::Vec3 dim{ 1.0, 1.0, 1.0 };
+		JPH::BoxShapeSettings body_shape_settings(dim * 0.5);
+		body_shape_settings.mConvexRadius = 0.01;
+		body_shape_settings.SetDensity(250.0);
+		body_shape_settings.SetEmbedded();
+		JPH::ShapeSettings::ShapeResult body_shape_result = body_shape_settings.Create();
+		JPH::ShapeRefC body_shape = body_shape_result.Get();
+		JPH::BodyCreationSettings body_settings(body_shape, JPH::RVec3(0.0 + i * 0.15, -2.0 - i * dim.GetX() * 1.5, 0.0 + i * 0.15), JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic, PhysicsWorld::Layers::MOVING);
+		uint32_t colorIndex = i % static_cast<uint32_t>(colors.size());
+		auto newBody = PhysicsWorld::world->AddNewObject(body_interface.CreateBody(body_settings), dim, colors[colorIndex]);
+		body_interface.AddBody(newBody->id, JPH::EActivation::Activate);
+	}
+	
+	// Fixed floor
+	JPH::Vec3 floorDim(100.0f, 0.1f, 100.0f);
+	JPH::BoxShapeSettings floor_shape_settings(floorDim);
 	floor_shape_settings.SetEmbedded();
 	JPH::ShapeSettings::ShapeResult floor_shape_result = floor_shape_settings.Create();
 	JPH::ShapeRefC floor_shape = floor_shape_result.Get();
-	JPH::BodyCreationSettings floor_settings(floor_shape, JPH::RVec3(0.0, -1.0, 0.0), JPH::Quat::sIdentity(), JPH::EMotionType::Static, PhysicsWorld::Layers::NON_MOVING);
-	floorBody = body_interface.CreateBody(floor_settings);
-	body_interface.AddBody(floorBody->GetID(), JPH::EActivation::DontActivate);
-	*/
+	JPH::BodyCreationSettings floor_settings(floor_shape, JPH::RVec3(0.0, -0.5, 0.0), JPH::Quat::sIdentity(), JPH::EMotionType::Static, PhysicsWorld::Layers::NON_MOVING);
+	auto floorBody = PhysicsWorld::world->AddNewObject(body_interface.CreateBody(floor_settings), floorDim, { 0.5, 0.5, 0.5 });
+	body_interface.AddBody(floorBody->id, JPH::EActivation::DontActivate);
+
+
+	physicsSystem.OptimizeBroadPhase();
 
 	// Physics / GFX interaction
-	objectShaderData.resize(1);
-	objectShaderData[0].model = JPH::Mat44::sIdentity();
+	objectShaderData.resize(physMaxBodies);
 
 	// Initialize slang compiler
 	slang::createGlobalSession(slangGlobalSession.writeRef());
@@ -380,7 +383,8 @@ int main()
 		{.stage = vk::ShaderStageFlagBits::eFragment, .module = shaderModule, .pName = "main" }
 	};
 	// Pipeline
-	pipelineLayout = device.createPipelineLayout({ .setLayoutCount = 1, .pSetLayouts = &sceneDescLayout });
+	vk::PushConstantRange pushConstantRange{ .stageFlags = vk::ShaderStageFlagBits::eAll, .size = sizeof(uint32_t) };
+	pipelineLayout = device.createPipelineLayout({ .setLayoutCount = 1, .pSetLayouts = &sceneDescLayout, .pushConstantRangeCount = 1, .pPushConstantRanges = &pushConstantRange });
 	vk::VertexInputBindingDescription vertexBinding{ .binding = 0, .stride = sizeof(float) * 6, .inputRate = vk::VertexInputRate::eVertex };
 	std::vector<vk::VertexInputAttributeDescription> vertexAttributes{
 		{.location = 0, .binding = 0, .format = vk::Format::eR32G32B32Sfloat },
@@ -467,7 +471,11 @@ int main()
 		vk::DeviceSize vOffset{ 0 };
 		cb.bindVertexBuffers(0, 1, &vBuffer, &vOffset);
 		cb.bindIndexBuffer(iBuffer, vOffset, vk::IndexType::eUint32);
-		cb.drawIndexed(sizeof(indices) / sizeof(indices[0]), 1, 0, 0, 0);
+		for (size_t i = 0; i < PhysicsWorld::world->bodies.size(); i++) {
+			uint32_t objIndex = static_cast<uint32_t>(i);
+			cb.pushConstants(pipelineLayout, vk::ShaderStageFlagBits::eAll, 0, sizeof(uint32_t), &objIndex);
+			cb.drawIndexed(sizeof(indices) / sizeof(indices[0]), 1, 0, 0, 0);
+		}
 		cb.endRendering();
 		vk::ImageMemoryBarrier barrier1{
 			.srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,
@@ -505,7 +513,7 @@ int main()
 					paused = !paused;
 				}
 				if (keyPressed->scancode == sf::Keyboard::Scancode::A) {
-					body->AddAngularImpulse(JPH::Vec3(30.0, 0.0, 75.0));
+					//newBody->body->AddAngularImpulse(JPH::Vec3(30.0, 0.0, 75.0));
 				}
 			}
 			if (event->is<sf::Event::Resized>()) {
@@ -544,8 +552,12 @@ int main()
 		if (!paused) {
 			physicsSystem.Update(dT.asSeconds(), physCollisionSteps, &temp_allocator, &job_system);
 		}
-		JPH::Mat44 scaleMat = JPH::Mat44::sIdentity().PostScaled(cubeDim);
-		objectShaderData[0].model = body_interface.GetWorldTransform(body->GetID()) * scaleMat;
+		for (size_t i = 0; i < PhysicsWorld::world->bodies.size(); i++) {
+			auto& object = PhysicsWorld::world->bodies[i];
+			JPH::Mat44 scaleMat = JPH::Mat44::sIdentity().PostScaled(object.scale);
+			objectShaderData[i].model = body_interface.GetWorldTransform(object.id) * scaleMat;
+			objectShaderData[i].color = glm::vec4(object.color, 1.0f);
+		}
 		memcpy(sBufferAllocInfo.pMappedData, objectShaderData.data(), sizeof(ObjectShaderData) * objectShaderData.size());
 	}
 	// Tear down
