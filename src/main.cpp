@@ -43,6 +43,12 @@ static inline void chk(HRESULT result) {
 
 VULKAN_HPP_DEFAULT_DISPATCH_LOADER_DYNAMIC_STORAGE
 
+struct ShaderBuffer {
+	vk::Buffer buffer;
+	VmaAllocation alloc;
+	VmaAllocationInfo allocInfo;
+};
+
 const uint32_t maxFramesInFlight{ 2 };
 const vk::SampleCountFlagBits sampleCount = vk::SampleCountFlagBits::e4;
 uint32_t imageIndex{ 0 };
@@ -72,17 +78,14 @@ std::vector<vk::Semaphore> renderSemaphores;
 VmaAllocator allocator{ VK_NULL_HANDLE };
 VmaAllocation vBufferAllocation{ VK_NULL_HANDLE };
 VmaAllocation iBufferAllocation{ VK_NULL_HANDLE };
-VmaAllocation sBufferAllocation{ VK_NULL_HANDLE };
-VmaAllocation uBufferAllocation{ VK_NULL_HANDLE };
-VmaAllocationInfo sBufferAllocInfo{};
-VmaAllocationInfo uBufferAllocInfo{};
 vk::Buffer vBuffer{ VK_NULL_HANDLE };
 vk::Buffer iBuffer{ VK_NULL_HANDLE };
-vk::Buffer sBuffer{ VK_NULL_HANDLE };
-vk::Buffer uBuffer{ VK_NULL_HANDLE };
 vk::DescriptorPool descPool{ VK_NULL_HANDLE };
 vk::DescriptorSetLayout sceneDescLayout{ VK_NULL_HANDLE };
-vk::DescriptorSet sceneDescSet{ VK_NULL_HANDLE };
+std::vector<ShaderBuffer> objectDataBuffers{};
+std::vector<ShaderBuffer> uniformBuffers{};
+std::vector<vk::DescriptorSet> descriptorSets;
+
 Slang::ComPtr<slang::IGlobalSession> slangGlobalSession;
 
 JPH::PhysicsSystem physicsSystem;
@@ -177,7 +180,7 @@ void updateViewMatrix(float dT)
 int main()
 {
 	// Setup
-	bool fullscreen = true;
+	bool fullscreen = false;
 	auto window = sf::RenderWindow(sf::VideoMode({ 1920u, 1080u }), "Vulkan Jolt Physics Playground", fullscreen ? sf::State::Fullscreen : sf::State::Windowed);
 	updatePerspective(window);
 	camera.setPosition({ 0.0f, 5.0f, -25.0f });
@@ -192,7 +195,6 @@ int main()
 	JPH::TempAllocatorImpl temp_allocator(10 * 1024 * 1024);
 	JPH::JobSystemThreadPool job_system(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, std::thread::hardware_concurrency() - 1);
 	physicsSystem.Init(physMaxBodies, physMaxBodies, physMaxBodies, physMaxBodies, broad_phase_layer_interface, object_vs_broadphase_layer_filter, object_vs_object_layer_filter);
-	// @todo: just for testing
 	physicsSystem.SetGravity({ 0.0, 9.8, 0.0 });
 	PhysicsWorld::MyBodyActivationListener body_activation_listener;
 	physicsSystem.SetBodyActivationListener(&body_activation_listener);
@@ -305,7 +307,6 @@ int main()
 	depthImageView = device.createImageView(depthViewCI);
 
 	// Buffers
-	// @todo: vert and idx single buffer
 
 	VkBufferCreateInfo bufferCI{ .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = sizeof(vertices), .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT };
 	VmaAllocationCreateInfo bufferAllocCI{ .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_ALLOW_TRANSFER_INSTEAD_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT, .usage = VMA_MEMORY_USAGE_AUTO };
@@ -318,15 +319,23 @@ int main()
 	chk(vmaCreateBuffer(allocator, &bufferCI, &bufferAllocCI, reinterpret_cast<VkBuffer*>(&iBuffer), &iBufferAllocation, &bufferAllocInfo));
 	memcpy(bufferAllocInfo.pMappedData, indices, sizeof(indices));
 
-	bufferCI.size = sizeof(ObjectShaderData) * objectShaderData.size();
-	bufferCI.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-	chk(vmaCreateBuffer(allocator, &bufferCI, &bufferAllocCI, reinterpret_cast<VkBuffer*>(&sBuffer), &sBufferAllocation, &sBufferAllocInfo));
-	memcpy(sBufferAllocInfo.pMappedData, objectShaderData.data(), sizeof(ObjectShaderData) * objectShaderData.size());
+	// SSBOs for all physics objects
 
+	objectDataBuffers.resize(maxFramesInFlight);
+	bufferCI.size = sizeof(ObjectShaderData) * physMaxBodies;
+	bufferCI.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+	for (auto& b : objectDataBuffers) {
+		chk(vmaCreateBuffer(allocator, &bufferCI, &bufferAllocCI, reinterpret_cast<VkBuffer*>(&b.buffer), &b.alloc, &b.allocInfo));
+	}
+
+	// UBOs for scene matrices
+
+	uniformBuffers.resize(maxFramesInFlight);
 	bufferCI.size = sizeof(SceneShaderData);
 	bufferCI.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-	chk(vmaCreateBuffer(allocator, &bufferCI, &bufferAllocCI, reinterpret_cast<VkBuffer*>(&uBuffer), &uBufferAllocation, &uBufferAllocInfo));
-	memcpy(uBufferAllocInfo.pMappedData, &sceneShaderData, sizeof(SceneShaderData));
+	for (auto& b : uniformBuffers) {
+		chk(vmaCreateBuffer(allocator, &bufferCI, &bufferAllocCI, reinterpret_cast<VkBuffer*>(&b.buffer), &b.alloc, &b.allocInfo));
+	}
 
 	// Descriptors
 	std::vector<vk::DescriptorPoolSize> descPoolSizes = {
@@ -340,15 +349,18 @@ int main()
 		{ .binding = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .descriptorCount = 1, .stageFlags = vk::ShaderStageFlagBits::eAll},
 	};
 	sceneDescLayout = device.createDescriptorSetLayout({ .bindingCount = 2, .pBindings = layoutBindings.data()});
-	sceneDescSet = device.allocateDescriptorSets({ .descriptorPool = descPool, .descriptorSetCount = 1, .pSetLayouts = &sceneDescLayout })[0];
-	vk::DescriptorBufferInfo sBufferInfo{ .buffer = sBuffer, .offset = 0, .range = sizeof(ObjectShaderData) * objectShaderData.size() };
-	vk::DescriptorBufferInfo uBufferInfo{ .buffer = uBuffer, .offset = 0, .range = sizeof(SceneShaderData) };
 
-	std::vector<vk::WriteDescriptorSet> writeDescriptorSets = {
-		{ .dstSet = sceneDescSet, .dstBinding = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eUniformBuffer, .pBufferInfo = &uBufferInfo },
-		{ .dstSet = sceneDescSet, .dstBinding = 1, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pBufferInfo = &sBufferInfo }
-	};
-	device.updateDescriptorSets(writeDescriptorSets, {});
+	descriptorSets.resize(maxFramesInFlight);
+	for (auto i = 0; i < descriptorSets.size(); i++) {
+		descriptorSets[i] = device.allocateDescriptorSets({.descriptorPool = descPool, .descriptorSetCount = 1, .pSetLayouts = &sceneDescLayout})[0];
+		vk::DescriptorBufferInfo uBufferInfo{ .buffer = uniformBuffers[i].buffer, .offset = 0, .range = sizeof(SceneShaderData)};
+		vk::DescriptorBufferInfo sBufferInfo{ .buffer = objectDataBuffers[i].buffer, .offset = 0, .range = sizeof(ObjectShaderData) * objectShaderData.size()};
+		std::vector<vk::WriteDescriptorSet> writeDescriptorSets = {
+			{.dstSet = descriptorSets[i], .dstBinding = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eUniformBuffer, .pBufferInfo = &uBufferInfo },
+			{.dstSet = descriptorSets[i], .dstBinding = 1, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pBufferInfo = &sBufferInfo }
+		};
+		device.updateDescriptorSets(writeDescriptorSets, {});
+	}
 
 	// Sync objects
 	commandPool = device.createCommandPool({ .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer, .queueFamilyIndex = qf });
@@ -448,7 +460,7 @@ int main()
 		device.resetFences(fences[frameIndex]);
 		device.acquireNextImageKHR(swapchain, UINT64_MAX, presentSemaphores[semaphoreIndex], VK_NULL_HANDLE, &imageIndex);
 		updateViewMatrix(dT.asSeconds());
-		memcpy(uBufferAllocInfo.pMappedData, &sceneShaderData, sizeof(SceneShaderData));
+		memcpy(uniformBuffers[frameIndex].allocInfo.pMappedData, &sceneShaderData, sizeof(SceneShaderData));
 		auto& cb = commandBuffers[frameIndex];
 		cb.reset();
 		cb.begin({ .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit });
@@ -488,7 +500,7 @@ int main()
 		cb.setViewport(0, 1, &vp);
 		cb.setScissor(0, 1, &renderingInfo.renderArea);
 		cb.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
-		cb.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, { sceneDescSet }, {});
+		cb.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, { descriptorSets[frameIndex]}, {});
 		vk::DeviceSize vOffset{ 0 };
 		cb.bindVertexBuffers(0, 1, &vBuffer, &vOffset);
 		cb.bindIndexBuffer(iBuffer, vOffset, vk::IndexType::eUint32);
@@ -610,7 +622,6 @@ int main()
 			}
 		}
 		// Update world
-		// @todo: buffers per frame
 		if (!paused) {
 			physicsSystem.Update(dT.asSeconds(), physCollisionSteps, &temp_allocator, &job_system);
 		}
@@ -620,8 +631,9 @@ int main()
 			objectShaderData[i].model = body_interface.GetWorldTransform(object.id) * scaleMat;
 			objectShaderData[i].color = glm::vec4(object.color, 1.0f);
 		}
-		memcpy(sBufferAllocInfo.pMappedData, objectShaderData.data(), sizeof(ObjectShaderData) * objectShaderData.size());
+		memcpy(objectDataBuffers[frameIndex].allocInfo.pMappedData, objectShaderData.data(), sizeof(ObjectShaderData) * objectShaderData.size());
 	}
+	
 	// Tear down
 	device.waitIdle();
 	for (auto i = 0; i < maxFramesInFlight; i++) {
@@ -642,8 +654,13 @@ int main()
 	}
 	vmaDestroyBuffer(allocator, vBuffer, vBufferAllocation);
 	vmaDestroyBuffer(allocator, iBuffer, iBufferAllocation);
-	vmaDestroyBuffer(allocator, sBuffer, sBufferAllocation);
-	vmaDestroyBuffer(allocator, uBuffer, uBufferAllocation);
+	for (auto& b : uniformBuffers) {
+		vmaDestroyBuffer(allocator, b.buffer, b.alloc);
+	}
+	for (auto& b : objectDataBuffers) {
+		vmaDestroyBuffer(allocator, b.buffer, b.alloc);
+	}
+
 	device.destroyCommandPool(commandPool, nullptr);
 	device.destroyPipelineLayout(pipelineLayout, nullptr);
 	device.destroyPipeline(pipeline, nullptr);
