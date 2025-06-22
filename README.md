@@ -4,6 +4,8 @@
 
 Playing around with the [Jolt physics engine](https://github.com/jrouwe/JoltPhysics) and how to integrate it with Vulkan.
 
+[Video of the sample in action](https://www.youtube.com/watch?v=1Yc6OdCM3sM])
+
 ## How the dynamic physics objects are rendered
 
 Probably the most interesting part of this sample is how the physics data calculated by Jolt is passed to Vulkan. Esp. as this sample allows for objects to be spawned dynamically.
@@ -37,7 +39,7 @@ for (auto& b : objectDataBuffers) {
 	}
 ```
 
-This way we don't need to recreated this buffer, unless we reach said max. no. of physics objects.
+This way we don't need to recreate this buffer, unless we reach said max. no. of physics objects.
 
 After running the physics simulation, relevant values are copied over to the buffer for the actual no. of physics objects:
 
