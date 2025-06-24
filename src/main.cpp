@@ -98,7 +98,7 @@ const uint32_t physMaxBodies = 4096;
 const uint32_t physNumBodyMutexes = 0;
 const uint32_t physMaxBodyPairs = 1024;
 const uint32_t physMaxContactConstraints = 1024;
-const uint32_t physCollisionSteps = 2;
+const uint32_t physCollisionSteps = 1;
 
 struct ObjectShaderData {
 	JPH::Mat44 model;
@@ -554,7 +554,6 @@ int main()
 					// Throw a new object in the camera view direction
 					const JPH::Vec3 dim{ 0.5, 0.5, 0.5 };
 					JPH::BoxShapeSettings body_shape_settings(dim * 0.5);
-					body_shape_settings.mConvexRadius = 0.01;
 					body_shape_settings.SetDensity(1000.0);
 					body_shape_settings.SetEmbedded();
 					JPH::ShapeSettings::ShapeResult body_shape_result = body_shape_settings.Create();
@@ -562,7 +561,8 @@ int main()
 					JPH::BodyCreationSettings body_settings(body_shape, JPH::RVec3(camera.position.x, camera.position.y, camera.position.z) * -1.0, JPH::Quat::sIdentity(), JPH::EMotionType::Dynamic, PhysicsWorld::Layers::MOVING);
 					auto newBody = PhysicsWorld::world->AddNewObject(body_interface.CreateBody(body_settings), dim, { 1.0, 1.0, 1.0 });
 					body_interface.AddBody(newBody->id, JPH::EActivation::Activate);
-					body_interface.AddLinearAndAngularVelocity(newBody->id, JPH::Vec3(camera.forwardVector.x, camera.forwardVector.y, camera.forwardVector.z) * -150.0f, JPH::Vec3(100.0f, 100.0f, 100.0f));
+					body_interface.SetMotionQuality(newBody->id, JPH::EMotionQuality::LinearCast);
+					body_interface.AddLinearVelocity(newBody->id, JPH::Vec3(camera.forwardVector.x, camera.forwardVector.y, camera.forwardVector.z) * -150.0f);
 				}
 
 				// Drop some random cubes
@@ -575,7 +575,6 @@ int main()
 						for (int32_t y = -4; y < 4; y++, idx++) {
 							const JPH::Vec3 dim{ 1.0, 1.0, 1.0 };
 							JPH::BoxShapeSettings body_shape_settings(dim * 0.5);
-							body_shape_settings.mConvexRadius = 0.01;
 							body_shape_settings.SetDensity(250.0);
 							body_shape_settings.SetEmbedded();
 							JPH::ShapeSettings::ShapeResult body_shape_result = body_shape_settings.Create();
