@@ -53,7 +53,6 @@ const uint32_t maxFramesInFlight{ 2 };
 const vk::SampleCountFlagBits sampleCount = vk::SampleCountFlagBits::e4;
 uint32_t imageIndex{ 0 };
 uint32_t frameIndex{ 0 };
-uint32_t semaphoreIndex{ 0 };
 vk::Result result;
 vk::Instance instance;
 vk::Device device;
@@ -368,11 +367,13 @@ int main()
 	for (auto i = 0; i < maxFramesInFlight; i++) {
 		fences[i] = device.createFence({ .flags = vk::FenceCreateFlagBits::eSignaled });
 	}
-	presentSemaphores.resize(swapchainImages.size());
+	presentSemaphores.resize(maxFramesInFlight);
+	for (auto& semaphore : presentSemaphores) {
+		semaphore = device.createSemaphore({});
+	}
 	renderSemaphores.resize(swapchainImages.size());
-	for (auto i = 0; i < swapchainImages.size(); i++) {
-		presentSemaphores[i] = device.createSemaphore({});
-		renderSemaphores[i] = device.createSemaphore({});
+	for (auto& semaphore : renderSemaphores) {
+		semaphore = device.createSemaphore({});
 	}
 	// Shaders
 	std::ifstream shaderFile("shaders/base.slang");
@@ -458,7 +459,7 @@ int main()
 		// Build CB
 		device.waitForFences(fences[frameIndex], true, UINT64_MAX);
 		device.resetFences(fences[frameIndex]);
-		device.acquireNextImageKHR(swapchain, UINT64_MAX, presentSemaphores[semaphoreIndex], VK_NULL_HANDLE, &imageIndex);
+		device.acquireNextImageKHR(swapchain, UINT64_MAX, presentSemaphores[frameIndex], VK_NULL_HANDLE, &imageIndex);
 		updateViewMatrix(dT.asSeconds());
 		memcpy(uniformBuffers[frameIndex].allocInfo.pMappedData, &sceneShaderData, sizeof(SceneShaderData));
 		auto& cb = commandBuffers[frameIndex];
@@ -523,19 +524,17 @@ int main()
 		vk::PipelineStageFlags waitStages = vk::PipelineStageFlagBits::eColorAttachmentOutput;
 		vk::SubmitInfo submitInfo{
 			.waitSemaphoreCount = 1,
-			.pWaitSemaphores = &presentSemaphores[semaphoreIndex],
+			.pWaitSemaphores = &presentSemaphores[frameIndex],
 			.pWaitDstStageMask = &waitStages,
 			.commandBufferCount = 1,
 			.pCommandBuffers = &cb,
 			.signalSemaphoreCount = 1,
-			.pSignalSemaphores = &renderSemaphores[semaphoreIndex],
+			.pSignalSemaphores = &renderSemaphores[imageIndex],
 		};
 		queue.submit(submitInfo, fences[frameIndex]);
-		queue.presentKHR({ .waitSemaphoreCount = 1, .pWaitSemaphores = &renderSemaphores[semaphoreIndex], .swapchainCount = 1, .pSwapchains = &swapchain, .pImageIndices = &imageIndex });
+		queue.presentKHR({ .waitSemaphoreCount = 1, .pWaitSemaphores = &renderSemaphores[imageIndex], .swapchainCount = 1, .pSwapchains = &swapchain, .pImageIndices = &imageIndex });
 		frameIndex++;
-		if (frameIndex >= maxFramesInFlight) { frameIndex = 0; }
 		frameIndex = (frameIndex + 1) % maxFramesInFlight;
-		semaphoreIndex = (semaphoreIndex + 1) % static_cast<uint32_t>(swapchainImages.size());
 		while (const std::optional event = window.pollEvent()) {
 			
 			if (event->is<sf::Event::Closed>()) {
